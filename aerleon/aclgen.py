@@ -173,6 +173,7 @@ def RenderFile(
                 optimize=optimize,
                 base_dir=base_directory,
                 shade_check=shade_check,
+                filename=input_file,
             )
     except policy.ShadingError as e:
         logging.warning('shading errors for %s:\n%s', input_file, e)
@@ -182,6 +183,10 @@ def RenderFile(
             'Error parsing policy file %s:\n%s%s'
             % (input_file, sys.exc_info()[0], sys.exc_info()[1])
         ) from e
+
+    if not pol:
+        logging.error('failed to parse policy file %s', input_file)
+        return
 
     platforms = {platform for header in pol.headers for platform in header.platforms}
 
