@@ -76,6 +76,7 @@ class Term(aclgenerator.Term):
         af: str = 'inet',
         verbose: bool = True,
         chained_terms: bool = True,
+        established_accepted: bool = False,
     ) -> None:
         """Setup a new term.
 
@@ -86,6 +87,8 @@ class Term(aclgenerator.Term):
           filter_action: The default action of the filter.
           af: Which address family ('inet' or 'inet6') to apply the term to.
           verbose: boolean if comments should be printed
+          established_accepted: a previous term of the filter already accepts
+            all ESTABLISHED,RELATED traffic, so only NEW state is matched.
 
         Raises:
           UnsupportedFilterError: Filter is not supported.
@@ -106,6 +109,7 @@ class Term(aclgenerator.Term):
         self.af = af
         self.verbose = verbose
         self.chained_terms = chained_terms
+        self.established_accepted = established_accepted
         if af == 'inet6':
             self._all_ips = nacaddr.IPv6('::/0')
             self._action_table['reject'] = '-j REJECT --reject-with ' 'icmp6-adm-prohibited'
@@ -566,10 +570,14 @@ class Term(aclgenerator.Term):
                     already_stateful = True
             if not already_stateful:
                 if 'ACCEPT' in action:
-                    # We have to permit established/related since a policy may not
-                    # have an existing blank permit for established/related, which
-                    # may be more efficient, but slightly less secure.
-                    options.append('-m state --state NEW,ESTABLISHED,RELATED')
+                    if self.established_accepted:
+                        # A previous generic term already accepts established/related
+                        options.append('-m state --state NEW')
+                    else:
+                        # We have to permit established/related since a policy may not
+                        # have an existing blank permit for established/related, which
+                        # may be more efficient, but slightly less secure.
+                        options.append('-m state --state NEW,ESTABLISHED,RELATED')
 
         if tcp_flags or (track_flags and track_flags[0]):
             check_fields = ','.join(sorted(set(tcp_flags + track_flags[0])))
@@ -798,6 +806,38 @@ class Iptables(aclgenerator.ACLGenerator):
                 target,
             )
 
+    @staticmethod
+    def _IsGenericEstablishedAccept(term: Term) -> bool:
+        """Check if a term accepts all ESTABLISHED,RELATED traffic, unrestricted.
+
+        Rendered as '-A <chain> -p all -m state --state ESTABLISHED,RELATED -j ACCEPT',
+        it makes the conntrack state match of the following accept terms redundant.
+        """
+        restrictions = (
+            term.verbatim,
+            term.source_address,
+            term.source_address_exclude,
+            term.destination_address,
+            term.destination_address_exclude,
+            term.source_port,
+            term.destination_port,
+            term.source_prefix,
+            term.destination_prefix,
+            term.source_interface,
+            term.destination_interface,
+            term.protocol_except,
+            term.icmp_type,
+            term.icmp_code,
+            term.packet_length,
+            term.fragment_offset,
+        )
+        return (
+            [str(x) for x in term.action] == ['accept']
+            and [str(x) for x in term.option] == ['established']
+            and term.protocol in ([], ['all'])
+            and not any(restrictions)
+        )
+
     def _TranslatePolicy(self, pol: Policy, exp_info: int) -> None:
         """Translate a policy from objects into strings."""
         default_action = None
@@ -878,6 +918,7 @@ class Iptables(aclgenerator.ACLGenerator):
             # add the terms
             new_terms = []
             term_names = set()
+            established_accepted = False
             for term in terms:
                 term.name = self.FixTermLength(
                     term.name,
@@ -911,8 +952,11 @@ class Iptables(aclgenerator.ACLGenerator):
                         filter_type,
                         self.verbose,
                         chained_terms,
+                        established_accepted,
                     )
                 )
+                if all_protocols_stateful and self._IsGenericEstablishedAccept(term):
+                    established_accepted = True
 
             self.iptables_policies.append(
                 (header, filter_name, filter_type, default_action, new_terms)
