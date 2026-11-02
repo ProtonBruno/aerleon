@@ -246,6 +246,14 @@ term term-fragment {
 }
 """
 
+TERM_IP_OPTIONS = """
+term term-ip-options {
+  protocol:: tcp
+  option:: ip-options
+  action:: deny
+}
+"""
+
 TERM_IS_FRAGMENT = """
 term term-is-fragment {
   option:: is-fragment
@@ -306,6 +314,28 @@ BAD_TERM_TCP_EST = """
 term bad-term-tcp-est {
   protocol:: udp
   option:: tcp-established
+  action:: accept
+}
+"""
+
+BAD_TERM_TCP_EST_NO_PROTO = """
+term bad-term-tcp-est-no-proto {
+  option:: tcp-established
+  action:: accept
+}
+"""
+
+BAD_TERM_EST_NO_PROTO = """
+term bad-term-est-no-proto {
+  option:: established
+  action:: accept
+}
+"""
+
+BAD_TERM_EST_ICMP = """
+term bad-term-est-icmp {
+  protocol:: icmp
+  option:: established
   action:: accept
 }
 """
@@ -733,18 +763,41 @@ class NokiaSROSTest(absltest.TestCase):
         self.assertTrue(entries[0]['match']['tcp-flags']['ack'])
         self.assertNotIn('tcp-established', entries[0]['match'])
 
-    def testEstablishedTcpRendersTcpEstablished(self):
+    def testEstablishedTcp(self):
+        """established on tcp adds the high ports and tcp-established, as in Juniper."""
         entries = self._entries(HEADER_INET, TERM_EST_TCP)
-        self.assertIn('tcp-established', entries[0]['match'])
+        self.assertEqual(
+            entries[0]['match'],
+            {
+                'dst-port': {'range': {'start': 1024, 'end': 65535}},
+                'protocol': 'tcp',
+                'tcp-established': [None],
+            },
+        )
 
     def testEstablishedTcpCpmMode(self):
         entries = self._entries(HEADER_CPM, TERM_EST_TCP)
-        self.assertTrue(entries[0]['match']['tcp-flags']['ack'])
+        self.assertEqual(
+            entries[0]['match'],
+            {
+                'dst-port': {'range': {'start': 1024, 'end': 65535}},
+                'protocol': 'tcp',
+                'tcp-flags': {'ack': True},
+            },
+        )
 
-    def testEstablishedNonTcpIgnored(self):
+    def testEstablishedUdpUsesHighPorts(self):
+        """established on udp can only be expressed as replies to high ports."""
         entries = self._entries(HEADER_INET, TERM_EST_UDP)
-        self.assertNotIn('tcp-established', entries[0]['match'])
-        self.assertNotIn('tcp-flags', entries[0]['match'])
+        self.assertEqual(
+            entries[0]['match'],
+            {'dst-port': {'range': {'start': 1024, 'end': 65535}}, 'protocol': 'udp'},
+        )
+
+    def testTcpEstablishedNoHighPorts(self):
+        """tcp-established matches on the TCP flags only, without adding ports."""
+        entries = self._entries(HEADER_INET, TERM_TCP_EST)
+        self.assertEqual(entries[0]['match'], {'protocol': 'tcp', 'tcp-established': [None]})
 
     def testFragment(self):
         entries = self._entries(HEADER_INET, TERM_FRAGMENT)
@@ -765,6 +818,45 @@ class NokiaSROSTest(absltest.TestCase):
     def testFragmentCpmMode(self):
         entries = self._entries(HEADER_CPM, TERM_FRAGMENT)
         self.assertEqual(entries[0]['match']['fragment'], 'true')
+
+    def testIpOptions(self):
+        entries = self._entries(HEADER_INET, TERM_IP_OPTIONS)
+        self.assertEqual(entries[0]['match'], {'protocol': 'tcp', 'option-present': True})
+
+    def testIpOptionsCpmMode(self):
+        entries = self._entries(HEADER_CPM, TERM_IP_OPTIONS)
+        self.assertEqual(entries[0]['match'], {'protocol': 'tcp', 'option-present': True})
+
+    def testIpOptionsWithTcpEstablished(self):
+        term = (
+            'term t {\n  protocol:: tcp\n  option:: ip-options tcp-established\n'
+            '  action:: deny\n}\n'
+        )
+        entries = self._entries(HEADER_INET, term)
+        self.assertEqual(
+            entries[0]['match'],
+            {'protocol': 'tcp', 'tcp-established': [None], 'option-present': True},
+        )
+
+    @mock.patch.object(nokiasros.logging, 'warning')
+    def testIpOptionsSkippedInInet6(self, mock_warning):
+        """IPv6 has no IP options: the term is skipped rather than widened to all tcp."""
+        for header in (HEADER_INET6, HEADER_CPM_INET6):
+            with self.subTest(header=header.strip()):
+                mock_warning.reset_mock()
+                entries = self._entries(header, TERM_IP_OPTIONS + TERM_DENY)
+                self.assertEqual([e['description'] for e in entries], ['term-deny'])
+                mock_warning.assert_called_once()
+
+    @mock.patch.object(nokiasros.logging, 'warning')
+    def testIpOptionsMixed(self, mock_warning):
+        output = json.loads(str(self._make_acl(HEADER_MIXED, TERM_IP_OPTIONS)))
+        self.assertEqual(
+            output[0]['ip-filter']['nokia-conf:entry'][0]['match'],
+            {'protocol': 'tcp', 'option-present': True},
+        )
+        self.assertEqual(output[1]['ipv6-filter']['nokia-conf:entry'], [])
+        mock_warning.assert_not_called()
 
     # -----------------------------------------------------------------------
     # Action
@@ -850,6 +942,21 @@ class NokiaSROSTest(absltest.TestCase):
     def testTcpEstablishedWithNonTcpError(self):
         acl = policy.ParsePolicy(HEADER_INET + BAD_TERM_TCP_EST, self.naming)
         with self.assertRaises(nokiasros.TcpEstablishedWithNonTcpError):
+            _ = nokiasros.NokiaSROS(acl, EXP_INFO)
+
+    def testTcpEstablishedWithoutProtocolError(self):
+        acl = policy.ParsePolicy(HEADER_INET + BAD_TERM_TCP_EST_NO_PROTO, self.naming)
+        with self.assertRaises(nokiasros.TcpEstablishedWithNonTcpError):
+            _ = nokiasros.NokiaSROS(acl, EXP_INFO)
+
+    def testEstablishedWithoutProtocolError(self):
+        acl = policy.ParsePolicy(HEADER_INET + BAD_TERM_EST_NO_PROTO, self.naming)
+        with self.assertRaises(aclgenerator.EstablishedError):
+            _ = nokiasros.NokiaSROS(acl, EXP_INFO)
+
+    def testEstablishedWithIcmpError(self):
+        acl = policy.ParsePolicy(HEADER_CPM + BAD_TERM_EST_ICMP, self.naming)
+        with self.assertRaises(aclgenerator.EstablishedError):
             _ = nokiasros.NokiaSROS(acl, EXP_INFO)
 
     def testFirstFragmentInCpmError(self):
