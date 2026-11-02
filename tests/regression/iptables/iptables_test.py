@@ -1036,6 +1036,22 @@ class AclCheckTest(absltest.TestCase):
         )
         print(result)
 
+    def testNoNewStateAfterGenericEstablished(self):
+        pol = policy.ParsePolicy(
+            GOOD_HEADER_1 + LOGGING_TERM_1 + STATEFUL_ONLY_TERM + GOOD_TERM_1, self.naming
+        )
+        result = str(iptables.Iptables(pol, EXP_INFO))
+        self.assertIn('-A I_foo -p tcp -m state --state NEW,ESTABLISHED,RELATED', result)
+        self.assertIn('-A I_stateful-only -p all -m state --state ESTABLISHED,RELATED', result)
+        self.assertIn('-A I_good-term-1 -p icmp -m state --state NEW -j ACCEPT', result)
+
+    def testNewStateAfterRestrictedEstablished(self):
+        pol = policy.ParsePolicy(GOOD_HEADER_1 + TCP_STATE_TERM + GOOD_TERM_1, self.naming)
+        result = str(iptables.Iptables(pol, EXP_INFO))
+        self.assertIn(
+            '-A I_good-term-1 -p icmp -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT', result
+        )
+
     @capture.stdout
     def testTcpEstablishedNostate(self):
         pol = policy.ParsePolicy(NOSTATE_HEADER + TCP_STATE_TERM, self.naming)

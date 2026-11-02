@@ -2809,6 +2809,8 @@ def ParsePolicy(
         preprocessed_data = '\n'.join(_Preprocess(data, base_dir=base_dir))
         global parser
         policy = parser.parse(preprocessed_data, lexer=lexer)
+        if policy is None:
+            return False
         policy.filename = filename
         return policy
 

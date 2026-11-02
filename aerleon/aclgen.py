@@ -173,6 +173,7 @@ def RenderFile(
                 optimize=optimize,
                 base_dir=base_directory,
                 shade_check=shade_check,
+                filename=input_file,
             )
     except policy.ShadingError as e:
         logging.warning('shading errors for %s:\n%s', input_file, e)
@@ -182,6 +183,10 @@ def RenderFile(
             'Error parsing policy file %s:\n%s%s'
             % (input_file, sys.exc_info()[0], sys.exc_info()[1])
         ) from e
+
+    if not pol:
+        logging.error('failed to parse policy file %s', input_file)
+        return
 
     platforms = {platform for header in pol.headers for platform in header.platforms}
 
@@ -393,13 +398,10 @@ def Run(
         logging.fatal(err_msg)
         return  # static type analyzer can't detect that logging.fatal exits program
 
-    # thead-safe list for storing files to write
-    manager: multiprocessing.managers.SyncManager = context.Manager()
-    write_files: WriteList = manager.list()
-
     with_errors = False
     logging.info('finding policies...')
     if max_renderers == 1 or policy_file:
+        write_files: WriteList = []
         if policy_file:
             policies = [pathlib.Path(policy_file)]
         else:
@@ -420,6 +422,8 @@ def Run(
             with_errors = True
             logging.warning('\n\nerror encountered in rendering process:\n%s\n\n', e)
     else:
+        manager: multiprocessing.managers.SyncManager = context.Manager()
+        write_files: WriteList = manager.list()
         # render all files in parallel
         policies = DescendDirectory(base_directory, ignore_directories)
         pool = context.Pool(processes=max_renderers)
