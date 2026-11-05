@@ -11,7 +11,7 @@ This lists contains all the common keys that are used across all generators (wit
 * _destination-address_: One or more destination address tokens.
 * _destination-port_: One or more service definition tokens.
 * _expiration_: Stop rendering this term after specified date in YYYY-MM-DD format. E.g. 2000-12-31.
-* _icmp-type_: Specify icmp-type code to match, see [ICMP types](#icmp-types_1) for list of valid arguments (**Not** supported on: **aruba**, **gce**, **k8s**)
+* _icmp-type_: Specify icmp-type code to match, see [ICMP types](#icmp-types_1) for list of valid arguments (**Not** supported on: **aruba**, **gce**, **k8s**, **openconfig**, **sonic**)
 * _name_: Name of the term.
 * _option_: See platforms supported Options section. (**Not** supported on: **k8s**, **gce**, **windows_advfirewall**, **windows_ipsec**)
 * _platform_: one or more target platforms for which this term should ONLY be rendered.
@@ -1245,6 +1245,8 @@ targets:
 * for common keys see the [common](#common) section above.
 * _source-prefix_: this should resolve to a named ipv4 or ipv6 prefix list under 'acl match-list'
 * _destination-prefix_: this should resolve to a named ipv4 or ipv6 prefix list under 'acl match-list'
+* _icmp-type_: rendered as `icmp type` (`icmp6 type` in IPv6 filters), with one entry per ICMP type. In mixed filters, a term with `icmp` or `icmpv6` and ICMP types is only rendered in the filter of the matching address family.
+* _icmp-code_: rendered as `icmp code` (`icmp6 code`), together with _icmp-type_.
 
 ### Sub Tokens
 
@@ -1280,7 +1282,7 @@ IP filter options:
 * _mixed_: render both an `ip-filter` and an `ipv6-filter` with the same name. Each term is rendered into the filter of the matching address family.
 * _accept_: set `default-action` to `accept`.
 * _drop_: set `default-action` to `drop`. This is the default.
-* _pktlenfilter_: set the filter `type` to `packet-length`.
+* _pktlenfilter_: set the filter `type` to `packet-length`. Required to match on `ttl` or `hop-limit`.
 * _syslog-profile N_: syslog profile used by entries with `logging`. Defaults to `102`.
 
 CPM filter options:
@@ -1297,11 +1299,11 @@ the description of the first entry as `<comment> | <term description>`.
 
 * for common keys see the [common](#common) section above.
 
-* _hop-limit_: Match IPv6 hop-limit, rendered as `hop-limit {lt: N}`.
+* _hop-limit_: Match the IPv6 hop limit: a value (`hop-limit {eq: N}`) or a range (`hop-limit:: N-M`, rendered as `hop-limit {range: {start: N, end: M}}`). IPv6 only: in an IPv4 filter a term with `hop-limit` and no `ttl` is not rendered. Requires `pktlenfilter`, so it cannot be used in CPM filters.
 * _icmp-code_: Match the ICMP code, together with `icmp-type`.
 * _logging_: Log matching packets to the header's syslog profile.
 * _policer_: Rate-limit matching packets with the named policer (`action rate-limit policer`).
-* _ttl_: Match IPv4 TTL, rendered as `ttl {lt: N}` (`hop-limit {lt: N}` in an IPv6 filter).
+* _ttl_: Match the IPv4 TTL: a value (`ttl {eq: N}`) or a range (`ttl:: N-M`, rendered as `ttl {range: {start: N, end: M}}`). IPv4 only: in an IPv6 filter a term with `ttl` and no `hop-limit` is not rendered. Requires `pktlenfilter`, so it cannot be used in CPM filters.
 
 (`verbatim` is not supported.)
 
